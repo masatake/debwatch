@@ -1,0 +1,9 @@
+2011-07-07  Masatake YAMATO <yamato@redhat.com>
+
+	* configure.ac: Version 0.0.2.
+
+	* debwatch (debwatch_checkout): Don't use mapfile.
+	Use cap instead.
+	(debwatch_update): Ditto.
+	(write_dot_debwatch): Don't use to print.
+

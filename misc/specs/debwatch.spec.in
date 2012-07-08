@@ -1,0 +1,43 @@
+Summary: Scripts to get source code with using debian/watch scripts
+Name: @PACKAGE@
+Version: @PACKAGE_VERSION@
+Release: @RPM_RELEASE@
+Source: debwatch-@PACKAGE_VERSION@.tar.bz2
+BuildRequires: gauche-devel wget gzip patchutils perl dpkg-devel git
+Requires: gauche wget gzip patchutils perl dpkg-devel git
+Buildarch: noarch
+
+Buildroot: %{_tmppath}/%{name}-root
+License: GPLv3
+
+Group: Development/Tools
+
+%description
+Scripts to get source code with using debian/watch scripts
+
+
+%prep
+%setup -q
+
+%build
+%configure
+make
+
+%install
+rm -rf $RPM_BUILD_ROOT
+make install DESTDIR=$RPM_BUILD_ROOT
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+%files
+%defattr(-,root,root)
+%{_bindir}/debwatch
+%{_bindir}/debwatch-url
+%{_datadir}/gauche*/site/lib/debwatch.scm
+
+
+%changelog
+
+* Mon Aug 27 2007 Masatake YAMATO <yamato@redhat.com> - @PACKAGE_VERSION@-@RPM_RELEASE@
+- First RPM build.

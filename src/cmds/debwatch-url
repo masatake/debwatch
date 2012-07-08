@@ -1,0 +1,38 @@
+#!/bin/sh
+#| -*- scheme -*- |#
+:; exec gosh -- $0 "$@"
+(use debwatch)
+(use gauche.parseopt)
+
+
+(define (show-help n)
+  (format #t "~a -h|--help\n" *program-name*)
+  (format #t "~a --print-default-host\n"     *program-name*)
+  (format #t "~a --print-default-main-dir\n" *program-name*)
+  (format #t "~a [--host=HOST] [--main-dir=MAIN-DIR] DPKG-NAME\n" *program-name*)
+  (exit n))
+
+(define (print-and-exit msg)
+  (print msg)
+  (exit 0))
+
+
+(define (main args)
+  (let-args (cdr args)
+      ((help "h|help" => (pa$ show-help 0))
+       (host "host=s" #f)
+       (main-dir "main-dir=s" #f)
+       (print-default-host     "print-default-host" => (pa$ print-and-exit default-host))
+       (print-default-main-dir "print-default-main-dir" => (pa$ print-and-exit default-main-dir))
+       . rest)
+    (unless (eq? (length rest) 1)
+      (with-output-to-port (current-error-port)
+	(pa$ show-help 1)))
+    (let1 dpkg (car rest)
+      (guard (e
+	      ((<error> e) 
+	       (display (ref e 'message) (current-error-port))
+	       (newline  (current-error-port))
+	       (exit 2)))
+	     (print (watch-file-url-for host main-dir dpkg))
+	     (exit 0)))))

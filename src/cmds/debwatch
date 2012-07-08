@@ -1,0 +1,456 @@
+#!/bin/bash
+
+
+MY_TMPDIR=
+DEBWATCH_DEBUG=
+DEBWATCH_CACHE_DIR=~/.debwatch
+mkdir -p "${DEBWATCH_CACHE_DIR}"
+
+
+function print_usage
+{
+    echo "Usage: "
+    echo "	debwatch --help|-h"
+    echo "	debwatch help"
+    echo "	debwatch [--debug] devscripts"
+    echo "	debwatch [--debug] preview [WATCH-SPEC] DPKG-NAME"
+    echo "	debwatch [--debug] checkout [WATCH-SPEC] DPKG-NAME"
+    echo "	debwatch [--debug] update"
+    echo "	debwatch [--debug] info"
+    echo ""
+    echo "WATCH SPEC: "
+    echo "	ftp://..."
+    echo "      file:///..."
+    echo "(ftp://$(debwatch-url --print-default-host)$(debwatch-url --print-default-main-dir) "
+    echo "is used as default value.)"
+}
+
+function debwatch_help
+{
+    print_usage
+    exit 0
+}
+
+function debwatch_devscripts
+{
+    if [ -d ${DEBWATCH_CACHE_DIR}/devscripts ]; then
+	exit 0
+    else
+	(
+	    cd ${DEBWATCH_CACHE_DIR}
+	    git clone git://git.debian.org/devscripts/devscripts.git
+	    exit $?
+	)
+    fi
+}
+
+function debwatch_preview
+{
+    local host
+    local main_dir
+    local watch_file
+    local -a WATCH_FILE
+    local dpkg
+    
+    if [ $# -eq 1 ]; then
+	host=$(debwatch-url --print-default-host)
+	main_dir=$(debwatch-url --print-default-main-dir)
+	dpkg=$1
+	shift
+    elif [ $# -eq 2 ]; then
+	case "$1" in
+	    ftp://*)
+		local ftp_spec="^ftp://([-a-zA-Z0-9.]+)(/.*)$"
+		if [[ "$1" =~ ${ftp_spec} ]]; then
+		    host="${BASH_REMATCH[1]}"
+		    main_dir="${BASH_REMATCH[2]}"
+		    shift
+		    dpkg=$1
+		else
+		    echo "broken ftp spec: $1" 1>&2
+		    exit 1
+		fi
+		;;
+	    file://*)
+		local file_spec="^file://(/.*)$"
+		if [[ "$1" =~ ${file_spec} ]]; then
+		    watch_file="${BASH_REMATCH[1]}"
+		    shift
+		    dpkg=$1
+		    if ! [ -r "${watch_file}" ]; then
+			echo "Cannot read watch file: ${watch_file}" 1>&2
+			exit 1
+		    fi
+		else
+		    echo "broken file spec: $1" 1>&2
+		    exit 1
+		fi
+		mapfile WATCH_FILE < ${watch_file}
+		if [ "${#WATCH_FILE[@]}" = 0 ]; then
+		    echo "Watch file is empty: $watch_file" 1>&2
+		    exit 1
+		fi
+		;;
+	    -)
+		shift
+		dpkg=$1
+		mapfile WATCH_FILE
+		if [ "${#WATCH_FILE[@]}" = 0 ]; then
+		    echo "Watch file is empty: (stdin)" 1>&2
+		    exit 1
+		fi
+		;;
+	    *)
+		{
+		    echo "Broken debwatch command line: $1"
+		    print_usage
+		    exit 1
+		}  1>&2
+		;;
+	esac
+    else
+	{
+	    echo "Wrong number of argument(s) for sub command: preview" 
+	    print_usage
+	    exit 1
+	} 1>&2
+    fi
+
+    
+    if [ "${#WATCH_FILE[@]}" -gt 0 ]; then
+	for l in "${WATCH_FILE[@]}"; do
+	    # printf "%q\n" $l
+	    echo $l
+	done
+	exit 0
+    fi
+    
+
+    local diff_gz_url="$MY_TMPDIR/diff_gz.url"
+    diff_gz_url=$(debwatch-url $dpkg)
+    local debwatch_url_status=$?
+    if [ "${debwatch_url_status}" != 0 ]; then
+	exit "${debwatch_url_status}"
+    fi
+
+    local diff_gz="$MY_TMPDIR/$dpkg.diff.gz"
+    local wget_opts
+    if [ -z "$DEBWATCH_DEBUG" ]; then
+	wget_opts=-q
+    fi
+
+    if ! wget ${wget_opts} ${diff_gz_url} -O "${diff_gz}"; then
+	exit 2
+    fi
+
+    local watch="$MY_TMPDIR/$dpkg.watch"
+    if ! ( gunzip -c ${diff_gz} | filterdiff -z -i '*/debian/watch' | patch  -o - -s > "$watch" ) ; then
+	exit 2
+    fi
+
+    if [ $(stat -c "%s" $watch) = 0 ]; then
+	exit 2
+    fi
+
+    cat $watch
+    exit 0
+}
+
+function debwatch__get 
+{
+    local dpkg
+    local ver
+    local watch
+
+    dpkg=$1
+    ver=$2
+    watch=$3
+
+    perl -I ${DEBWATCH_CACHE_DIR}/devscripts ${DEBWATCH_CACHE_DIR}/devscripts/scripts/uscan.pl \
+	--package $dpkg \
+	--upstream-version $ver \
+	--watchfile $watch \
+	--download \
+        --dehs \
+        --destdir $MY_TMPDIR \
+	--repack \
+	--symlink > $MY_TMPDIR/${dpkg}.dehs    
+    
+    return $?
+}
+
+function extract_uversion
+{
+    local dehs=$1
+    sed -n -e 's|<upstream-version>\(.*\)</upstream-version>|\1|p' $dehs
+}
+
+function write_dot_debwatch
+{
+    local watch_spec=$1
+    shift
+    local dpkg=$1
+    shift
+    local ver=$1
+    shift
+
+    echo '# -*- shell-script -*-'
+    echo "DEBWATCH_WATCH_SPEC=$watch_spec"
+    echo "DEBWATCH_PACKAGE=$dpkg"  
+    echo "DEBWATCH_UPSTREAM_VERSION=$ver"
+    echo -n "DEBWATCH_WATCH='"
+    echo "$*"
+    echo -n "'"
+    echo ""
+}
+
+function updated_p
+{
+    local dehs=$1
+
+    fgrep -e '<status>Newer version available</status>' $dehs > /dev/null 2>&1
+    return $?
+}
+
+function debwatch_checkout
+{
+    local dpkg
+    local watch_spec
+    local ver
+    local watch="$MY_TMPDIR/$dpkg.watch"
+    
+    if [ $# -eq 1 ]; then
+	dpkg=$1
+	shift
+    elif [ $# -eq 2 ]; then
+	watch_spec=$1
+	shift
+	dpkg=$1
+	shift
+    else
+	{
+	    echo "Wrong number of argument(s) for sub command: checkout" 
+	    print_usage
+	    exit 1
+	} 1>&2
+    fi
+
+    ver=${1:-0.0.0}
+
+    if ! debwatch preview ${watch_spec} $dpkg > $watch; then
+	exit 2
+    fi
+
+    if ! debwatch devscripts; then
+	exit $?
+    fi
+
+    
+    debwatch__get $dpkg $ver $watch
+    local status=$?
+    local dehs=$MY_TMPDIR/${dpkg}.dehs
+    if [ ! $status = 0 ]; then
+	if [ -r $dehs ]; then
+	    cat $dehs 1>&2
+	fi
+	exit $status
+    fi
+
+    if ! updated_p "$dehs"; then
+	exit 3
+    fi
+
+    local nver=$(extract_uversion $dehs)
+    mkdir -p $dpkg
+
+    if [ -n "$watch_spec" ] && ( [[ "$watch_spec" =~ ^file:///.* ]] || [ "$watch_spec" = "-" ] ); then
+	write_dot_debwatch "$watch_spec" $dpkg $nver "$(cat $watch)" > $dpkg/.debwatch
+    else
+	write_dot_debwatch "$watch_spec" $dpkg $nver > $dpkg/.debwatch
+    fi
+
+    (
+	cd $dpkg;
+	tar zxvf $MY_TMPDIR/${dpkg}_${nver}.orig.tar.gz
+     )
+
+    exit 0
+}
+
+function member_p
+{
+    local elt=$1
+    shift
+
+    local found
+    for x in "$@"; do
+	if [ $x = $elt ]; then
+	    found=yes
+	fi
+    done
+
+    if [ -n "$found" ]; then
+	return 0
+    else
+	return 1
+    fi
+}
+
+# 0: updated
+# 1: error
+# 2: cannot find
+# 3: not updated
+function debwatch_update
+{
+    if ! [ -r .debwatch ]; then
+	echo "Not at debwatch directory" 1>&2
+	exit 1
+    fi
+
+    if ! source .debwatch; then
+	echo "Cannot read .debwatch file" 1>&2
+	exit 1
+    fi
+
+    if [ -z "$DEBWATCH_WATCH_SPEC" ]; then
+	echo "No definision for DEBWATCH_WATCH_SPEC" 1>&2
+    fi
+
+    if [ -z "$DEBWATCH_PACKAGE" ]; then
+	echo "No definision for DEBWATCH_PACKAGE" 1>&2
+    fi
+
+    if [ -z "$DEBWATCH_UPSTREAM_VERSION" ]; then
+	echo "No definision for DEBWATCH_UPSTREAM_VERSION" 1>&2
+    fi
+
+    
+    local dpkg=$DEBWATCH_PACKAGE
+    local ver=$DEBWATCH_UPSTREAM_VERSION
+    local watch="$MY_TMPDIR/$dpkg.watch"
+
+    if [ -z "${DEBWATCH_WATCH}" ]; then
+	if ! debwatch preview $DEBWATCH_WATCH_SPEC $dpkg > $watch; then
+	    exit 2
+	fi
+    else
+	echo "${DEBWATCH_WATCH}" > $watch
+    fi
+	
+
+    if ! debwatch devscripts; then
+	exit $?
+    fi
+        
+    debwatch__get $dpkg $ver $watch
+    local status=$?
+    local dehs=$MY_TMPDIR/${dpkg}.dehs
+    if [ ! $status = 0 ]; then
+	if [ -r $dehs ]; then
+	    cat $dehs 1>&2
+	fi
+	exit $status
+    fi
+
+    if ! updated_p "$dehs"; then
+	exit 3
+    fi
+
+    local nver=$(extract_uversion $dehs)
+    if [ -z "${DEBWATCH_WATCH}" ]; then
+	write_dot_debwatch "${DEBWATCH_WATCH_SPEC}" $dpkg $nver > ./._debwatch
+    else
+	write_dot_debwatch "${DEBWATCH_WATCH_SPEC}" $dpkg $nver "$(cat $watch)" > ./._debwatch
+    fi
+	
+
+    local old_ls=$(ls)
+    tar zxvf $MY_TMPDIR/${dpkg}_${nver}.orig.tar.gz
+    mv ./._debwatch ./.debwatch
+    local new_ls=$(ls)
+
+    for n in $new_ls; do
+	if member_p $n $old_ls  && \
+ 	   ( !  [ $n = "." ] )  && \
+	   ( !  [ $n = ".." ] ) && \
+	   ( !  [ $n = ".debwatch" ] ); then
+	    rm -rf ./$n
+	fi
+    done
+    exit 0
+}
+
+
+function debwatch_info
+{
+    if ! [ -r .debwatch ]; then
+	echo "Not at debwatch directory" 1>&2
+	exit 1
+    fi
+
+    if ! source .debwatch; then
+	echo "Cannot read .debwatch file" 1>&2
+	exit 1
+    fi
+
+    if [ -z "$DEBWATCH_PACKAGE" ]; then
+	echo "No definision for DEBWATCH_PACKAGE" 1>&2
+    fi
+
+    if [ -z "$DEBWATCH_UPSTREAM_VERSION" ]; then
+	echo "No definision for DEBWATCH_UPSTREAM_VERSION" 1>&2
+    fi
+
+    cat .debwatch
+
+    exit 0
+}
+
+function main
+{
+    local cmd=
+    while [ $# -gt 0 ]; do
+	case "$1" in
+	    -h|--help)
+		print_usage
+		exit 0
+		;;
+	    --debug)
+		DEBWATCH_DEBUG=yes
+		;;
+	    *)
+		break
+		;;
+	esac
+	shift
+    done
+
+    if [ $# -lt 1 ]; then
+	{
+	    echo "No sub command given"
+	    print_usage
+	    exit 1
+	} 1>&2
+    fi
+
+    cmd=$1
+    shift
+
+    if ! type debwatch_$cmd > /dev/null 2>&1; then
+	{
+	    echo "No such sub command: " $cmd
+	    print_usage
+	    exit 1
+	} 1>&2
+    else
+	MY_TMPDIR=`mktemp -d`
+	if [ -z "$DEBWATCH_DEBUG" ]; then
+	    trap "chmod -R u+w $MY_TMPDIR; /bin/rm -rf $MY_TMPDIR" 0
+	else
+	    echo "TMPDIR: $MY_TMPDIR" 1>&2
+	fi
+	debwatch_$cmd "$@"
+    fi
+}
+
+main "$@"

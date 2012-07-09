@@ -271,7 +271,7 @@ function debwatch_checkout
 
     (
 	cd $dpkg;
-	tar zxvf $MY_TMPDIR/${dpkg}_${nver}.orig.tar.gz
+	vanillax $MY_TMPDIR/${dpkg}_${nver}.orig.tar.gz
      )
 
     exit 0
@@ -365,7 +365,7 @@ function debwatch_update
 	
 
     local old_ls=$(ls)
-    tar zxvf $MY_TMPDIR/${dpkg}_${nver}.orig.tar.gz
+    vanillax $MY_TMPDIR/${dpkg}_${nver}.orig.tar.gz
     mv ./._debwatch ./.debwatch
     local new_ls=$(ls)
 

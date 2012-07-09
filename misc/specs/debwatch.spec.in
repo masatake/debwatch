@@ -4,7 +4,7 @@ Version: @PACKAGE_VERSION@
 Release: @RPM_RELEASE@
 Source: debwatch-@PACKAGE_VERSION@.tar.bz2
 BuildRequires: gauche-devel wget gzip patchutils perl dpkg-devel git
-Requires: gauche wget gzip patchutils perl dpkg-devel git
+Requires: gauche wget gzip patchutils perl dpkg-devel git vanillax
 Buildarch: noarch
 
 Buildroot: %{_tmppath}/%{name}-root

@@ -42,6 +42,7 @@ fi
 
 
 dnl dpkg
+dnl vanillax
 
 AC_SUBST(DEBWATCH_MAJOR_VERSION, pkg_major_version)
 AC_SUBST(DEBWATCH_MINOR_VERSION, pkg_minor_version)

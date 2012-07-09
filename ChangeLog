@@ -5,6 +5,8 @@
 	* src/cmds/debwatch (debwatch_update, debwatch_checkout):
 	Use vanillax.
 
+	* misc/specs/debwatch.spec.in (Requires): Added vanillax.
+
 2011-07-07  Masatake YAMATO <yamato@redhat.com>
 
 	* configure.ac: Version 0.0.2.
